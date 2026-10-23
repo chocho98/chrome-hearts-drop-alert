@@ -1,0 +1,18 @@
+name: Test ntfy notification
+
+on:
+  workflow_dispatch:
+
+jobs:
+  send-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send test notification to iPhone
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          curl --fail --show-error \
+            -H "Title: Chrome Hearts 알림 테스트" \
+            -H "Priority: high" \
+            -d "테스트 성공! 아이폰 알림 설정이 연결되었습니다." \
+            "https://ntfy.sh/${NTFY_TOPIC}"
