@@ -47,3 +47,13 @@ jobs:
             -H "Tags: warning" \
             -d "감시 작업에 오류가 발생했습니다. GitHub Actions 실행 로그를 확인하세요." \
             "https://ntfy.sh/${NTFY_TOPIC}"
+      - name: Test iPhone notification
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          curl --fail --silent --show-error \
+            -H "Title: Chrome Hearts 알림 테스트" \
+            -H "Priority: high" \
+            -d "테스트 성공! 아이폰 알림 연결이 정상적으로 작동합니다." \
+            "https://ntfy.sh/${NTFY_TOPIC}"
