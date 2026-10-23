@@ -4,112 +4,146 @@ import re
 import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urldefrag
 
-BASE_URL = "https://www.chromehearts.com/"
-STATE_FILE = Path("seen_products.json")
+BASE = "https://www.chromehearts.com"
 TOPIC = os.environ["NTFY_TOPIC"]
+STATE = Path("seen_products.json")
+VERSION = 2
+
+# Official site sections to check.
+PAGES = [
+    "/",
+    "/eyewear.html",
+    "/baccarat",
+    "/scents",
+    "/boxers-leggings",
+    "/intimates",
+    "/socks",
+]
+
+SKIP = re.compile(
+    r"/(account|login|cart|checkout|search|contact|about|"
+    r"locations|retailers|general|magazine|privacy|terms)(/|$)",
+    re.I,
+)
 
 
-class ProductLinks(HTMLParser):
-    def __init__(self):
+class Links(HTMLParser):
+    def __init__(self, page_url):
         super().__init__()
-        self.links = set()
+        self.page_url = page_url
+        self.found = set()
 
     def handle_starttag(self, tag, attrs):
         if tag != "a":
             return
-        attrs = dict(attrs)
-        href = attrs.get("href", "")
-        if not href:
+
+        href = dict(attrs).get("href", "")
+        if not href or href.startswith(("mailto:", "tel:", "javascript:")):
             return
 
-        full_url = urljoin(BASE_URL, href)
-        parsed = urlparse(full_url)
+        url = urldefrag(urljoin(self.page_url, href))[0]
+        parsed = urlparse(url)
 
-        if parsed.netloc not in {
-            "www.chromehearts.com",
-            "chromehearts.com",
-        }:
+        if parsed.scheme not in ("http", "https"):
             return
-
-        path = parsed.path.rstrip("/")
-        if not path or path == "/":
-            return
-
-        # Ignore account, checkout, and informational pages.
-        if re.search(
-            r"/(account|cart|checkout|search|contact|about)(/|$)",
-            path,
-            re.I,
+        if parsed.netloc.lower() not in (
+            "www.chromehearts.com", "chromehearts.com"
         ):
             return
 
-        self.links.add(full_url.split("?")[0])
+        path = parsed.path.rstrip("/") or "/"
+        if SKIP.search(path):
+            return
+        if path in PAGES:
+            return
+
+        self.found.add(f"https://www.chromehearts.com{path}")
 
 
-def fetch_page(url):
-    request = urllib.request.Request(
+def get_html(url):
+    req = urllib.request.Request(
         url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (compatible; ProductMonitor/1.0)"
-        },
+        headers={"User-Agent": "Mozilla/5.0 ChromeHeartsMonitor/2.0"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return response.read().decode("utf-8", errors="replace")
+    with urllib.request.urlopen(req, timeout=30) as res:
+        return res.read().decode("utf-8", errors="replace")
 
 
-def send_notification(title, message):
-    request = urllib.request.Request(
+def notify(url):
+    req = urllib.request.Request(
         f"https://ntfy.sh/{TOPIC}",
-        data=message.encode("utf-8"),
+        data=f"새 링크 발견:\n{url}".encode(),
         headers={
-            "Title": title,
+            "Title": "Chrome Hearts 새 링크 감지",
             "Priority": "high",
-            "Tags": "shopping_bags",
+            "Tags": "bell",
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        if response.status >= 300:
-            raise RuntimeError("Notification failed")
+    with urllib.request.urlopen(req, timeout=30) as res:
+        if res.status >= 300:
+            raise RuntimeError("ntfy 알림 전송 실패")
 
 
 def main():
-    html = fetch_page(BASE_URL)
-    parser = ProductLinks()
-    parser.feed(html)
-    current = sorted(parser.links)
+    current = set()
+    errors = []
+
+    for path in PAGES:
+        url = urljoin(BASE + "/", path.lstrip("/"))
+        try:
+            parser = Links(url)
+            parser.feed(get_html(url))
+            current.update(parser.found)
+            print(f"Checked {path}: {len(parser.found)} links")
+        except Exception as exc:
+            errors.append(path)
+            print(f"Could not check {path}: {type(exc).__name__}")
 
     if not current:
-        raise RuntimeError(
-            "No site links found. Check whether the website structure changed."
-        )
+        raise RuntimeError("링크를 가져오지 못했습니다. 사이트 접근을 확인하세요.")
 
-    if STATE_FILE.exists():
-        previous = set(json.loads(STATE_FILE.read_text(encoding="utf-8")))
-    else:
-        previous = set()
+    # Do not send alerts if this is the first run of the new version.
+    old_data = {}
+    if STATE.exists():
+        try:
+            old_data = json.loads(STATE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            old_data = {}
 
-    if not previous:
-        # First run establishes a baseline instead of alerting for every link.
-        STATE_FILE.write_text(
-            json.dumps(current, indent=2),
+    if not isinstance(old_data, dict) or old_data.get("version") != VERSION:
+        STATE.write_text(
+            json.dumps(
+                {"version": VERSION, "links": sorted(current)},
+                indent=2,
+            ),
             encoding="utf-8",
         )
-        print(f"Baseline saved: {len(current)} links")
+        print(f"New baseline saved: {len(current)} links")
+        if errors:
+            print(f"Some pages could not be checked: {errors}")
         return
 
-    new_links = sorted(set(current) - previous)
+    previous = set(old_data.get("links", []))
+    new_links = sorted(current - previous)
 
     for link in new_links:
-        send_notification("Chrome Hearts: New page detected", link)
+        notify(link)
+        print(f"Notification sent: {link}")
 
-    STATE_FILE.write_text(
-        json.dumps(sorted(previous | set(current)), indent=2),
+    STATE.write_text(
+        json.dumps(
+            {"version": VERSION, "links": sorted(previous | current)},
+            indent=2,
+        ),
         encoding="utf-8",
     )
-    print(f"Checked {len(current)} links; new links: {len(new_links)}")
+
+    print(f"Total links: {len(current)}; new links: {len(new_links)}")
+    if errors:
+        print(f"Some pages could not be checked: {errors}")
 
 
 if __name__ == "__main__":
