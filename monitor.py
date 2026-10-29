@@ -17,7 +17,6 @@ STATE = Path("seen_products.json")
 PAGES = [
     "/",
     "/eyewear.html",
-    "/clothing",
     "/baccarat",
     "/scents",
     "/boxers-leggings",
