@@ -22,6 +22,10 @@ PAGES = [
     "/boxers-leggings",
     "/intimates",
     "/socks",
+    "/hat",
+    "/scarf",
+    "/shop",
+    "/on/demandware.store/Sites-ChromeHearts-Site/en_US/Search-Show?cgid=SWEATPANTS",
 ]
 
 # 상품이 아닌 페이지 제외
