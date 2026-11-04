@@ -73,7 +73,8 @@ CATEGORY_PATHS = {
 
 SKIP_RE = re.compile(
     r"/(account|login|cart|checkout|search|contact|about|"
-    r"locations|retailers|general|magazine|privacy|terms)(/|$)",
+    r"locations|retailers|general|magazine|privacy|terms|disclosure)"
+    r"(?:\\.html)?(?:/|$)",
     re.IGNORECASE,
 )
 
@@ -216,12 +217,19 @@ def get_response(url):
 
 def get_html(url):
 
-    data = get_response(url)
-
-    return data.decode(
-        "utf-8",
-        errors="replace",
+    request = urllib.request.Request(
+        url,
+        headers=HEADERS,
     )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
+        final_url = response.geturl()
+        html = response.read().decode(
+            "utf-8",
+            errors="replace",
+        )
+
+    return html, final_url
 
 
 # ==========================================
@@ -320,7 +328,21 @@ def collect_from_pages(pages):
         )
 
         try:
-            html = get_html(url)
+            html, final_url = get_html(url)
+
+            # Skip guessed category URLs that redirect to a different page
+            # (usually the homepage when that category is unavailable).
+            requested = urllib.parse.urlsplit(url)
+            landed = urllib.parse.urlsplit(final_url)
+            requested_path = requested.path.rstrip("/") or "/"
+            landed_path = landed.path.rstrip("/") or "/"
+
+            if requested_path != landed_path:
+                print(
+                    f"  REDIRECT SKIPPED: landed on {final_url}",
+                    flush=True,
+                )
+                continue
 
             parser = Links(url)
             parser.feed(html)
