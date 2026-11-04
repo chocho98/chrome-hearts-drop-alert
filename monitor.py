@@ -5,6 +5,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import http.cookiejar
 import xml.etree.ElementTree as ET
 
 from html.parser import HTMLParser
@@ -25,8 +26,17 @@ HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
 }
+
+# Keep the storefront session across requests. Some Search-Show category
+# endpoints require cookies issued by the homepage/session bootstrap.
+COOKIE_JAR = http.cookiejar.CookieJar()
+OPENER = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(COOKIE_JAR)
+)
 
 SITEMAPS = [
     BASE + "/sitemap_index.xml",
@@ -260,7 +270,7 @@ def get_response(url):
         headers=HEADERS,
     )
 
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with OPENER.open(request, timeout=30) as response:
         return response.read()
 
 
@@ -271,7 +281,7 @@ def get_html(url):
         headers=HEADERS,
     )
 
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with OPENER.open(request, timeout=30) as response:
         final_url = response.geturl()
         html = response.read().decode(
             "utf-8",
