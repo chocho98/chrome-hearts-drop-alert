@@ -58,6 +58,17 @@ APPAREL_SEARCH_TERMS = [
     "sweatshirt", "sweatpants", "pants", "shorts", "jacket",
 ]
 
+# Real apparel product URLs supplied by the user. These are discovery seeds,
+# not baseline records: only related product links found on the pages are added.
+SEED_PRODUCT_URLS = [
+    "https://www.chromehearts.com/short-sleeve-pocket-crew/214325BLKXXX00R.html",
+    "https://www.chromehearts.com/black-sweatpants/190372BLKXXX01W.html",
+    "https://www.chromehearts.com/sports-mesh/green-mesh/196637_196639.html",
+    "https://www.chromehearts.com/hoodie/black-hoodie/152701BLKXXX04K.html",
+    "https://www.chromehearts.com/hoodie/deadly-doll-hoodie/202577BLKXXX03Z.html",
+    "https://www.chromehearts.com/shirt/long-sleeve-pocket-crew/129112WHTXXX03C.html",
+]
+
 # Official category slug candidates. Empty categories may redirect home.
 CATEGORY_SLUGS = [
     "socks", "scents", "baccarat", "intimates", "boxers-leggings",
@@ -581,6 +592,105 @@ def collect_from_apparel_searches():
     return products
 
 
+
+
+# ==========================================
+# 7B. 사용자가 제공한 실제 의류 상세 페이지 역추적
+# ==========================================
+
+def collect_from_seed_products():
+
+    discovered_products = set()
+
+    for seed_url in SEED_PRODUCT_URLS:
+        print(f"Inspecting apparel seed: {seed_url}", flush=True)
+
+        try:
+            html, final_url = get_html(seed_url)
+            final_path = urllib.parse.urlsplit(final_url).path.rstrip("/") or "/"
+
+            title_match = re.search(
+                r"<title[^>]*>(.*?)</title>",
+                html,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            title = (
+                re.sub(r"\\s+", " ", title_match.group(1)).strip()
+                if title_match else "(no title)"
+            )
+
+            metadata_count = len(re.findall(
+                r"""<span\\b(?=[^>]*\\bclass=["'][^"']*product-metadata[^"']*["'])[^>]*>""",
+                html,
+                flags=re.IGNORECASE | re.DOTALL,
+            ))
+
+            product_schema_count = len(re.findall(
+                r"""["']@type["']\\s*:\\s*["']Product["']""",
+                html,
+                flags=re.IGNORECASE,
+            ))
+
+            pid_hints = sorted(set(re.findall(
+                r"""(?:productID|productId|product-id|data-pid)["'\\s:=]+([A-Za-z0-9_-]{5,})""",
+                html,
+                flags=re.IGNORECASE,
+            )))[:10]
+
+            endpoint_hints = sorted(set(re.findall(
+                r"""(?:https?:)?//[^"'\\s<>]+|["']([^"'<>]{0,180}(?:Product-Show|Product-Variation|Product-Detail|Search-Show)[^"'<>]{0,180})["']""",
+                html,
+                flags=re.IGNORECASE,
+            )))[:10]
+
+            print(
+                f"  SEED RESPONSE: landed={final_url}; title={title[:100]!r}; "
+                f"bytes={len(html.encode('utf-8'))}; metadata={metadata_count}; "
+                f"product-schema={product_schema_count}; pid-hints={pid_hints}",
+                flush=True,
+            )
+
+            if final_path == "/":
+                print("  SEED UNAVAILABLE: redirected to homepage", flush=True)
+                continue
+
+            parser = Links(final_url)
+            parser.feed(html)
+
+            linked_products = {
+                link for link in parser.found
+                if is_product_url(link)
+            }
+            linked_products.update(collect_product_metadata(html, final_url))
+
+            # The seed itself is deliberately not counted as a newly detected
+            # item. Only other product URLs linked from the live detail page
+            # can enter the discovery set.
+            seed_normalized = normalize_url(seed_url)
+            linked_products.discard(seed_normalized)
+
+            discovered_products.update(linked_products)
+
+            print(
+                f"  SEED DISCOVERY: links={len(parser.found)}; "
+                f"related product URLs={len(linked_products)}",
+                flush=True,
+            )
+            for product_url in sorted(linked_products):
+                print(f"    RELATED PRODUCT: {product_url}", flush=True)
+
+        except Exception as exc:
+            print(f"  SEED SKIPPED: {exc}", flush=True)
+
+        time.sleep(1)
+
+    print(
+        f"Seed-page related products: {len(discovered_products)}",
+        flush=True,
+    )
+    return discovered_products
+
+
 # ==========================================
 # 8. 전체 상품 수집
 # ==========================================
@@ -615,12 +725,23 @@ def collect_products():
         flush=True,
     )
 
+    seed_related_products = collect_from_seed_products()
+    print(
+        f"Seed related products: {len(seed_related_products)}",
+        flush=True,
+    )
+
     print(
         f"Sitemap products: {len(sitemap_products)}",
         flush=True,
     )
 
-    combined = page_products | sitemap_products | apparel_search_products
+    combined = (
+        page_products
+        | sitemap_products
+        | apparel_search_products
+        | seed_related_products
+    )
 
     print(
         f"Combined products: {len(combined)}",
