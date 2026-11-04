@@ -313,9 +313,9 @@ def get_html(url):
             html,
             flags=re.IGNORECASE | re.DOTALL,
         )
-        page_title = re.sub(r"\\s+", " ", title_match.group(1)).strip() if title_match else "(no title)"
+        page_title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else "(no title)"
         metadata_count = len(re.findall(
-            r"""<span\\b(?=[^>]*\\bclass=["'][^"']*product-metadata[^"']*["'])[^>]*>""",
+            r"""<span\b(?=[^>]*\bclass=["'][^"']*product-metadata[^"']*["'])[^>]*>""",
             html,
             flags=re.IGNORECASE | re.DOTALL,
         ))
