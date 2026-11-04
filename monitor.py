@@ -312,7 +312,17 @@ def get_html(url):
         headers=HEADERS,
     )
 
+    # Keep the homepage session cookies and identify the storefront as referrer.
+    if urllib.parse.urlsplit(url).path != "/":
+        request.add_header("Referer", BASE + "/")
+
     with OPENER.open(request, timeout=30) as response:
+        sent_cookie_header = request.get_header("Cookie", "")
+        sent_cookie_names = [
+            part.split("=", 1)[0].strip()
+            for part in sent_cookie_header.split(";")
+            if "=" in part
+        ]
         final_url = response.geturl()
         status = response.getcode()
         content_type = response.headers.get("Content-Type", "")
@@ -347,7 +357,8 @@ def get_html(url):
             f"type={content_type}; bytes={len(raw)}; "
             f"content-length={content_length or 'unknown'}; "
             f"title={page_title[:120]!r}; metadata={metadata_count}; "
-            f"set-cookie-names={','.join(set_cookie_names) or 'none'}",
+            f"set-cookie-names={','.join(set_cookie_names) or 'none'}; "
+            f"sent-cookie-names={','.join(sent_cookie_names) or 'none'}",
             flush=True,
         )
 
