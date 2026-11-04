@@ -19,7 +19,7 @@ from pathlib import Path
 BASE = "https://www.chromehearts.com"
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 STATE = Path("seen_products.json")
-VERSION = 7
+VERSION = 8
 
 HEADERS = {
     "User-Agent": (
@@ -49,6 +49,14 @@ SWEATPANTS_PAGE = (
     + "/on/demandware.store/Sites-ChromeHearts-Site/"
     + "en_US/Search-Show?cgid=SWEATPANTS"
 )
+
+# Search-Show is the native storefront search route. Probe apparel terms
+# directly instead of guessing category slugs. Only real product links found
+# in a non-homepage search response are eligible for monitoring.
+APPAREL_SEARCH_TERMS = [
+    "shirt", "t-shirt", "long sleeve", "hoodie",
+    "sweatshirt", "sweatpants", "pants", "shorts", "jacket",
+]
 
 # Official category slug candidates. Empty categories may redirect home.
 CATEGORY_SLUGS = [
@@ -474,7 +482,71 @@ def collect_from_pages(pages):
 
 
 # ==========================================
-# 7. 전체 상품 수집
+# 7. 공홈 상품 검색 결과 검사
+# ==========================================
+
+def collect_from_apparel_searches():
+
+    products = set()
+    successful_searches = 0
+
+    for term in APPAREL_SEARCH_TERMS:
+        query = urllib.parse.urlencode({"q": term})
+        url = (
+            BASE
+            + "/on/demandware.store/Sites-ChromeHearts-Site/"
+            + "en_US/Search-Show?"
+            + query
+        )
+
+        print(f"Checking apparel search: {term}", flush=True)
+
+        try:
+            html, final_url = get_html(url)
+            landed_path = urllib.parse.urlsplit(final_url).path.rstrip("/") or "/"
+
+            # A homepage redirect means the storefront did not provide results.
+            if landed_path == "/":
+                print(f"  SEARCH REDIRECTED: {final_url}", flush=True)
+                time.sleep(1)
+                continue
+
+            parser = Links(final_url)
+            parser.feed(html)
+
+            found = {
+                link for link in parser.found
+                if is_product_url(link)
+            }
+            metadata_products = collect_product_metadata(html, final_url)
+            found.update(metadata_products)
+
+            # Do not count a generic page as a successful search response.
+            if found or "Search-Show" in final_url:
+                successful_searches += 1
+
+            products.update(found)
+            print(
+                f"  Landed: {final_url}; links: {len(parser.found)}; "
+                f"metadata: {len(metadata_products)}; products: {len(found)}",
+                flush=True,
+            )
+
+        except Exception as exc:
+            print(f"  SEARCH SKIPPED ({term}): {exc}", flush=True)
+
+        time.sleep(1)
+
+    print(
+        f"Apparel searches successful: {successful_searches}/"
+        f"{len(APPAREL_SEARCH_TERMS)}; products: {len(products)}",
+        flush=True,
+    )
+    return products
+
+
+# ==========================================
+# 8. 전체 상품 수집
 # ==========================================
 
 def collect_products():
@@ -501,12 +573,18 @@ def collect_products():
         flush=True,
     )
 
+    apparel_search_products = collect_from_apparel_searches()
+    print(
+        f"Apparel search products: {len(apparel_search_products)}",
+        flush=True,
+    )
+
     print(
         f"Sitemap products: {len(sitemap_products)}",
         flush=True,
     )
 
-    combined = page_products | sitemap_products
+    combined = page_products | sitemap_products | apparel_search_products
 
     print(
         f"Combined products: {len(combined)}",
