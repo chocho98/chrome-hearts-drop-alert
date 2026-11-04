@@ -29,6 +29,7 @@ HEADERS = {
 }
 
 SITEMAPS = [
+    BASE + "/sitemap_index.xml",
     BASE + "/sitemap.xml",
     BASE + "/sitemap_0.xml",
 ]
@@ -104,21 +105,24 @@ class Links(HTMLParser):
 
 def collect_product_metadata(html, current_url):
     """
-    Read Chrome Hearts product-card metadata and match each product ID
-    to its canonical product-detail link.
+    Extract product IDs from server-rendered product tiles.
+    If a category endpoint redirects directly to a product detail page,
+    use that final product URL when its PID matches the metadata.
     """
     products = set()
     spans = re.findall(
-        r"<span\b(?=[^>]*\bclass=[\"'][^\"']*product-metadata[^\"']*[\"'])[^>]*>",
+        r"<span\\b(?=[^>]*\\bclass=[\\\"'][^\\\"']*product-metadata[^\\\"']*[\\\"'])[^>]*>",
         html,
         flags=re.IGNORECASE | re.DOTALL,
     )
+
+    current_path = urllib.parse.urlsplit(current_url).path
 
     for span in spans:
         attrs = {
             key.lower(): value
             for key, value in re.findall(
-                r"data-([a-z]+)=[\"']([^\"']*)[\"']",
+                r"data-([a-z]+)=[\\\"']([^\\\"']*)[\\\"']",
                 span,
                 flags=re.IGNORECASE,
             )
@@ -128,17 +132,65 @@ def collect_product_metadata(html, current_url):
             continue
 
         link_pattern = (
-            r"href=[\"']([^\"']*/"
+            r"href=[\\\"']([^\\\"']*/"
             + re.escape(pid)
-            + r"\.html(?:\?[^\"']*)?)[\"']"
+            + r"\\.html(?:\\?[^\\\"']*)?)[\\\"']"
         )
         match = re.search(link_pattern, html, flags=re.IGNORECASE)
+
+        candidate = None
         if match:
-            url = normalize_url(match.group(1), current_url)
-            if url and is_product_url(url):
-                products.add(url)
+            candidate = normalize_url(match.group(1), current_url)
+        elif current_path.lower().endswith("/" + pid.lower() + ".html"):
+            candidate = normalize_url(current_url)
+
+        if candidate and is_product_url(candidate):
+            products.add(candidate)
 
     return products
+
+
+def discover_category_pages(html, current_url):
+    """
+    Discover category pages and Search-Show category IDs from same-site links.
+    """
+    discovered = set()
+    utility = {
+        "account", "bag", "cart", "checkout", "contact", "disclosure",
+        "general", "locations", "login", "magazine", "privacy", "search",
+        "shop", "terms", "wishlist",
+    }
+
+    for href in re.findall(
+        r"href=[\\\"']([^\\\"']+)[\\\"']",
+        html,
+        flags=re.IGNORECASE,
+    ):
+        full = urllib.parse.urljoin(current_url, href)
+        parsed = urllib.parse.urlsplit(full)
+
+        if parsed.netloc.lower() not in ("www.chromehearts.com", "chromehearts.com"):
+            continue
+
+        if parsed.path.endswith("/Search-Show"):
+            cgid = urllib.parse.parse_qs(parsed.query).get("cgid", [])
+            if len(cgid) == 1 and re.fullmatch(r"[A-Za-z0-9_-]+", cgid[0]):
+                discovered.add(
+                    BASE + parsed.path + "?cgid=" + urllib.parse.quote(cgid[0], safe="")
+                )
+            continue
+
+        path = parsed.path.strip("/")
+        if not path or "/" in path or path.lower().endswith(".html"):
+            continue
+
+        slug = path.lower()
+        if slug in utility or not re.fullmatch(r"[a-z0-9-]+", slug):
+            continue
+
+        discovered.add(BASE + "/" + path)
+
+    return discovered
 
 
 # ==========================================
@@ -168,12 +220,9 @@ def normalize_url(href, current_url=None):
         if path.endswith("/Search-Show"):
             query = urllib.parse.parse_qs(parsed.query)
 
-            if query.get("cgid", [""])[0].upper() == "SWEATPANTS":
-                return (
-                    BASE
-                    + path
-                    + "?cgid=SWEATPANTS"
-                )
+            cgid = query.get("cgid", [""])[0]
+            if cgid and re.fullmatch(r"[A-Za-z0-9_-]+", cgid):
+                return BASE + path + "?cgid=" + urllib.parse.quote(cgid, safe="")
 
         return BASE + path
 
@@ -289,7 +338,15 @@ def collect_from_sitemaps():
 
                     path = urllib.parse.urlsplit(url).path.rstrip("/") or "/"
 
-                    if path in CATEGORY_PATHS:
+                    if (
+                        path in CATEGORY_PATHS
+                        or (
+                            path != "/"
+                            and "/" not in path.strip("/")
+                            and not path.lower().endswith(".html")
+                            and not SKIP_RE.search(path)
+                        )
+                    ):
                         sitemap_pages.add(url)
 
                     elif is_product_url(url):
@@ -319,8 +376,17 @@ def collect_from_pages(pages):
 
     products = set()
     successful = 0
+    pending = list(sorted(pages))
+    visited = set()
+    discovered_total = 0
+    max_pages = 100
 
-    for url in sorted(pages):
+    while pending and len(visited) < max_pages:
+
+        url = pending.pop(0)
+        if url in visited:
+            continue
+        visited.add(url)
 
         print(
             f"Checking page: {url}",
@@ -329,15 +395,12 @@ def collect_from_pages(pages):
 
         try:
             html, final_url = get_html(url)
-
-            # Skip guessed category URLs that redirect to a different page
-            # (usually the homepage when that category is unavailable).
-            requested = urllib.parse.urlsplit(url)
             landed = urllib.parse.urlsplit(final_url)
-            requested_path = requested.path.rstrip("/") or "/"
             landed_path = landed.path.rstrip("/") or "/"
 
-            if requested_path != landed_path:
+            # Empty or unavailable categories commonly redirect to homepage.
+            # Do not discard redirects to actual product/category pages.
+            if landed_path == "/" and urllib.parse.urlsplit(url).path.rstrip("/") != "":
                 print(
                     f"  REDIRECT SKIPPED: landed on {final_url}",
                     flush=True,
@@ -345,44 +408,34 @@ def collect_from_pages(pages):
                 time.sleep(1)
                 continue
 
-            parser = Links(url)
+            parser = Links(final_url)
             parser.feed(html)
 
-            # 스웨트팬츠 페이지의 링크를 별도로 출력
-            if "Search-Show" in url:
-
-                print(
-                    "=== SWEATPANTS PAGE LINKS ===",
-                    flush=True,
-                )
-
-                for link in sorted(parser.found):
-                    print(
-                        f"SEARCH LINK: {link}",
-                        flush=True,
-                    )
-
-            # Read both ordinary product links and product-card metadata.
             found = {
                 link
                 for link in parser.found
                 if is_product_url(link)
             }
-            metadata_products = collect_product_metadata(html, url)
+            metadata_products = collect_product_metadata(html, final_url)
             found.update(metadata_products)
-
             products.update(found)
+
+            new_categories = discover_category_pages(html, final_url)
+            for category_url in sorted(new_categories):
+                if category_url not in visited and category_url not in pending:
+                    pending.append(category_url)
+                    discovered_total += 1
+
             successful += 1
 
             print(
-                f"  Links: {len(parser.found)}; "
-                f"metadata: {len(metadata_products)}; "
-                f"products: {len(found)}",
+                f"  Landed: {final_url}; links: {len(parser.found)}; "
+                f"metadata: {len(metadata_products)}; products: {len(found)}; "
+                f"new categories: {len(new_categories)}",
                 flush=True,
             )
 
         except Exception as exc:
-
             print(
                 f"  PAGE SKIPPED: {exc}",
                 flush=True,
@@ -390,8 +443,15 @@ def collect_from_pages(pages):
 
         time.sleep(1)
 
+    if pending:
+        print(
+            f"WARNING: Page limit reached; {len(pending)} discovered pages remain.",
+            flush=True,
+        )
+
     print(
-        f"Successful pages: {successful}/{len(pages)}",
+        f"Successful pages: {successful}/{len(visited)}; "
+        f"discovered category links: {discovered_total}",
         flush=True,
     )
 
