@@ -49,6 +49,13 @@ SWEATPANTS_PAGE = (
     + "/on/demandware.store/Sites-ChromeHearts-Site/"
     + "en_US/Search-Show?cgid=SWEATPANTS&site=502"
 )
+# Also test the native category route without the optional site parameter.
+# Some SFRA storefronts resolve cgid from the active session/site context.
+SWEATPANTS_PAGE_DEFAULT_SITE = (
+    BASE
+    + "/on/demandware.store/Sites-ChromeHearts-Site/"
+    + "en_US/Search-Show?cgid=SWEATPANTS"
+)
 
 # Search-Show is the native storefront search route. Probe apparel terms
 # directly instead of guessing category slugs. Only real product links found
@@ -94,6 +101,7 @@ PAGES = [
     "/shop",
     "/on/demandware.store/Sites-ChromeHearts-Site/en_US/Default-Start",
     SWEATPANTS_PAGE,
+    SWEATPANTS_PAGE_DEFAULT_SITE,
 ] + [f"/{slug}" for slug in CATEGORY_SLUGS]
 
 CATEGORY_PATHS = {
@@ -481,6 +489,23 @@ def collect_from_pages(pages):
                 for link in parser.found
                 if is_product_url(link)
             }
+
+            # Search-Show can redirect a one-item category directly to its
+            # product detail page. Capture that final URL itself; it may not
+            # appear as an anchor in the returned HTML.
+            normalized_final = normalize_url(final_url)
+            normalized_requested = normalize_url(url)
+            if (
+                normalized_final
+                and normalized_final != normalized_requested
+                and is_product_url(normalized_final)
+            ):
+                found.add(normalized_final)
+                print(
+                    f"  REDIRECTED PRODUCT CAPTURE: {normalized_final}",
+                    flush=True,
+                )
+
             metadata_products = collect_product_metadata(html, final_url)
             found.update(metadata_products)
             products.update(found)
