@@ -4,6 +4,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 
 from html.parser import HTMLParser
 from pathlib import Path
@@ -13,7 +14,7 @@ BASE = "https://www.chromehearts.com"
 TOPIC = os.environ["NTFY_TOPIC"].strip()
 STATE = Path("seen_products.json")
 
-# 공식 미국 사이트에서 확인된 공개 쇼핑 페이지
+# 실제 확인된 공식 쇼핑 페이지
 PAGES = [
     "/",
     "/eyewear.html",
@@ -25,18 +26,25 @@ PAGES = [
     "/hat",
     "/scarf",
     "/shop",
-    "/on/demandware.store/Sites-ChromeHearts-Site/en_US/Search-Show?cgid=SWEATPANTS",
 ]
 
-# 상품이 아닌 페이지 제외
+# 사이트맵 주소
+SITEMAPS = [
+    BASE + "/sitemap.xml",
+    BASE + "/sitemap_0.xml",
+]
+
 SKIP = re.compile(
     r"/(account|login|cart|checkout|search|contact|about|"
-    r"locations|retailers|general|magazine|privacy|terms)(/|$)",
+    r"locations|retailers|general|magazine|privacy|terms|"
+    r"on/demandware)(/|$)",
     re.I,
 )
 
-# 알려진 카테고리 주소
-CATEGORY_PATHS = set(PAGES)
+CATEGORY_PATHS = {
+    urlparse(urljoin(BASE, page)).path.rstrip("/") or "/"
+    for page in PAGES
+}
 
 
 class Links(HTMLParser):
@@ -49,42 +57,48 @@ class Links(HTMLParser):
         if tag.lower() != "a":
             return
 
-        attrs = dict(attrs)
-        href = attrs.get("href", "").strip()
+        href = dict(attrs).get("href", "").strip()
 
         if not href or href.startswith(
             ("mailto:", "tel:", "javascript:", "#")
         ):
             return
 
-        url = urldefrag(urljoin(self.page_url, href))[0]
-        parsed = urlparse(url)
+        url = normalize_url(urljoin(self.page_url, href))
 
-        if parsed.scheme not in ("http", "https"):
-            return
-
-        if parsed.netloc.lower() not in (
-            "www.chromehearts.com",
-            "chromehearts.com",
-        ):
-            return
-
-        path = parsed.path.rstrip("/") or "/"
-
-        if SKIP.search(path):
-            return
-
-        # 쿼리 문자열을 제외하고 공식 주소로 정규화
-        self.found.add(BASE + path)
+        if url:
+            self.found.add(url)
 
 
-def get_html(url):
+def normalize_url(url):
+    url = urldefrag(url)[0]
+    parsed = urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        return None
+
+    if parsed.netloc.lower() not in (
+        "www.chromehearts.com",
+        "chromehearts.com",
+    ):
+        return None
+
+    path = parsed.path.rstrip("/") or "/"
+
+    if SKIP.search(path):
+        return None
+
+    # 추적용 쿼리 문자열 제거
+    return BASE + path
+
+
+def get_response(url):
     req = urllib.request.Request(
         url,
         headers={
             "User-Agent": (
                 "Mozilla/5.0 (compatible; "
-                "ChromeHeartsProductMonitor/4.0)"
+                "ChromeHeartsProductMonitor/5.0)"
             ),
             "Accept-Language": "en-US,en;q=0.9",
         },
@@ -93,78 +107,184 @@ def get_html(url):
     with urllib.request.urlopen(req, timeout=25) as response:
         if response.status != 200:
             raise RuntimeError(
-                f"Unexpected HTTP status {response.status}: {url}"
+                f"HTTP {response.status}: {url}"
             )
 
-        charset = response.headers.get_content_charset() or "utf-8"
-        return response.read().decode(charset, errors="replace")
+        return response.read()
+
+
+def get_html(url):
+    data = get_response(url)
+    return data.decode("utf-8", errors="replace")
 
 
 def is_product_url(url):
-    path = urlparse(url).path.rstrip("/") or "/"
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/") or "/"
 
-    if path in CATEGORY_PATHS or SKIP.search(path):
+    if path in CATEGORY_PATHS:
         return False
 
-    # 상품 상세 페이지로 보이는 HTML 주소
-    if path.lower().endswith(".html"):
-        return True
+    if SKIP.search(path):
+        return False
 
-    # 카테고리 아래의 상세 주소도 수집
-    parts = [part for part in path.split("/") if part]
-
-    if len(parts) >= 2:
-        return True
-
-    return False
+    # 공식 상품 상세 페이지로 확인할 수 있는 HTML 주소
+    return path.lower().endswith(".html")
 
 
-def collect_products():
+def collect_from_pages():
     products = set()
-    successful_pages = 0
+    successful = 0
 
     for page in PAGES:
         url = urljoin(BASE, page)
+        print(f"Checking page: {url}", flush=True)
 
-        print(f"Checking category: {url}", flush=True)
+        try:
+            html = get_html(url)
 
-        html = get_html(url)
+            parser = Links(url)
+            parser.feed(html)
 
-        parser = Links(url)
-        parser.feed(html)
+            found = {
+                link for link in parser.found
+                if is_product_url(link)
+            }
 
-        links = parser.found
-        successful_pages += 1
+            products.update(found)
+            successful += 1
 
-        found_here = {
-            link for link in links
-            if is_product_url(link)
-        }
+            print(
+                f"  Links: {len(parser.found)}; "
+                f"products: {len(found)}",
+                flush=True,
+            )
 
-        products.update(found_here)
+        except Exception as exc:
+            print(
+                f"  PAGE SKIPPED: {exc}",
+                flush=True,
+            )
+
+        time.sleep(1)
+
+    print(
+        f"Successful category pages: {successful}/{len(PAGES)}",
+        flush=True,
+    )
+
+    return products, successful
+
+
+def collect_from_sitemap():
+    products = set()
+    visited = set()
+    pending = list(SITEMAPS)
+
+    sitemap_count = 0
+    max_sitemaps = 20
+
+    while pending and sitemap_count < max_sitemaps:
+        sitemap_url = pending.pop(0)
+
+        if sitemap_url in visited:
+            continue
+
+        visited.add(sitemap_url)
+        sitemap_count += 1
 
         print(
-            f"  Links found: {len(links)}; "
-            f"product candidates: {len(found_here)}",
+            f"Checking sitemap: {sitemap_url}",
             flush=True,
         )
 
-        # 사이트에 부담을 주지 않도록 요청 간격 유지
+        try:
+            data = get_response(sitemap_url)
+            root = ET.fromstring(data)
+
+            root_type = root.tag.split("}")[-1].lower()
+
+            locations = [
+                element.text.strip()
+                for element in root.iter()
+                if element.tag.split("}")[-1].lower() == "loc"
+                and element.text
+            ]
+
+            if root_type == "sitemapindex":
+                for location in locations:
+                    if len(pending) < max_sitemaps:
+                        pending.append(location)
+
+            elif root_type == "urlset":
+                for location in locations:
+                    url = normalize_url(location)
+
+                    if url and is_product_url(url):
+                        products.add(url)
+
+                print(
+                    f"  Sitemap products: {len(products)}",
+                    flush=True,
+                )
+
+        except Exception as exc:
+            print(
+                f"  SITEMAP SKIPPED: {exc}",
+                flush=True,
+            )
+
         time.sleep(1)
 
-    if successful_pages != len(PAGES):
-        raise RuntimeError("Not all category pages were checked.")
+    print(
+        f"Total sitemap product candidates: {len(products)}",
+        flush=True,
+    )
+
+    return products, sitemap_count
+
+
+def collect_products():
+    page_products, successful_pages = collect_from_pages()
+    sitemap_products, sitemap_count = collect_from_sitemap()
+
+    products = page_products | sitemap_products
+
+    print(
+        f"Page products: {len(page_products)}",
+        flush=True,
+    )
+    print(
+        f"Sitemap products: {len(sitemap_products)}",
+        flush=True,
+    )
+    print(
+        f"Combined products: {len(products)}",
+        flush=True,
+    )
+
+    if successful_pages == 0 and not products:
+        raise RuntimeError(
+            "All category pages failed and no products were found."
+        )
+
+    if not products:
+        raise RuntimeError(
+            "No product links found. "
+            "Existing baseline will be protected."
+        )
 
     return products
 
 
 def extract_urls(data):
-    """기존 기록에서 URL을 최대한 복구한다."""
     urls = set()
 
     if isinstance(data, str):
-        if data.startswith(BASE):
-            urls.add(data.rstrip("/"))
+        url = normalize_url(data)
+
+        if url:
+            urls.add(url)
 
     elif isinstance(data, list):
         for item in data:
@@ -172,8 +292,12 @@ def extract_urls(data):
 
     elif isinstance(data, dict):
         for key, value in data.items():
-            if isinstance(key, str) and key.startswith(BASE):
-                urls.add(key.rstrip("/"))
+            if isinstance(key, str):
+                url = normalize_url(key)
+
+                if url:
+                    urls.add(url)
+
             urls.update(extract_urls(value))
 
     return urls
@@ -184,7 +308,9 @@ def load_seen():
         return None
 
     try:
-        data = json.loads(STATE.read_text(encoding="utf-8"))
+        data = json.loads(
+            STATE.read_text(encoding="utf-8")
+        )
         return extract_urls(data)
 
     except (OSError, json.JSONDecodeError) as exc:
@@ -199,7 +325,7 @@ def save_seen(products):
     temp.write_text(
         json.dumps(
             {
-                "version": 4,
+                "version": 5,
                 "products": sorted(products),
             },
             ensure_ascii=False,
@@ -239,58 +365,66 @@ def main():
     if not TOPIC:
         raise RuntimeError("NTFY_TOPIC is empty.")
 
-    # 전체 목록 수집이 끝나기 전에는 기록을 변경하지 않는다.
     current = collect_products()
-
-    if not current:
-        raise RuntimeError(
-            "No product links found. "
-            "Refusing to overwrite the existing baseline."
-        )
-
     previous = load_seen()
 
-    # 최초 실행 또는 복구할 기록이 없는 경우
-    # 모든 기존 상품을 신상품으로 오인하지 않도록 기준선만 저장
     if previous is None:
         save_seen(current)
+
         print(
             f"Initial baseline saved: {len(current)} links",
             flush=True,
         )
+
         notify(
             "Chrome Hearts Monitor",
-            "Monitoring started successfully. "
-            f"Baseline: {len(current)} product links.\n"
-            "Newly discovered links will trigger alerts.",
+            "Monitoring started successfully.\n"
+            f"Baseline: {len(current)} product links.",
         )
         return
 
     new_products = current - previous
 
-    print(f"Previously recorded: {len(previous)}", flush=True)
-    print(f"Currently found: {len(current)}", flush=True)
-    print(f"New links: {len(new_products)}", flush=True)
+    print(
+        f"Previously recorded: {len(previous)}",
+        flush=True,
+    )
+    print(
+        f"Currently found: {len(current)}",
+        flush=True,
+    )
+    print(
+        f"New products: {len(new_products)}",
+        flush=True,
+    )
 
-    # 새 링크가 있는 경우 알림이 성공한 뒤 기록을 저장한다.
-    # 알림이 실패하면 다음 실행에서 다시 감지할 수 있다.
     if new_products:
         message = (
-            f"New product links detected: {len(new_products)}\n\n"
+            f"New product links detected: "
+            f"{len(new_products)}\n\n"
             + "\n".join(sorted(new_products))
         )
 
-        notify("Chrome Hearts: New Product", message)
+        notify(
+            "Chrome Hearts: New Product",
+            message,
+        )
 
-    # 목록 수집이 성공적으로 끝난 뒤 기록 갱신
     save_seen(previous | current)
 
-    print("Product records updated successfully.", flush=True)
+    print(
+        "Product records updated successfully.",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
     try:
         main()
+
     except Exception as exc:
-        print(f"MONITOR ERROR: {exc}", flush=True)
+        print(
+            f"MONITOR ERROR: {exc}",
+            flush=True,
+        )
         raise
