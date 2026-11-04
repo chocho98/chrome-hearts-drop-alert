@@ -134,7 +134,7 @@ def collect_product_metadata(html, current_url):
         link_pattern = (
             r"""href=["']([^"']*/"""
             + re.escape(pid)
-            + r""".html(?:\?[^"']*)?["']"""
+            + r""".html(?:\?[^"']*)?)["']"""
         )
         match = re.search(link_pattern, html, flags=re.IGNORECASE)
 
