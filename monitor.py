@@ -74,7 +74,7 @@ CATEGORY_PATHS = {
 SKIP_RE = re.compile(
     r"/(account|login|cart|checkout|search|contact|about|"
     r"locations|retailers|general|magazine|privacy|terms|disclosure)"
-    r"(?:\\.html)?(?:/|$)",
+    r"(?:\.html)?(?:/|$)",
     re.IGNORECASE,
 )
 
@@ -342,6 +342,7 @@ def collect_from_pages(pages):
                     f"  REDIRECT SKIPPED: landed on {final_url}",
                     flush=True,
                 )
+                time.sleep(1)
                 continue
 
             parser = Links(url)
