@@ -82,7 +82,7 @@ PAGES = [
     "/scarf",
     "/shop",
     "/on/demandware.store/Sites-ChromeHearts-Site/en_US/Default-Start",
-    "/on/demandware.store/Sites-ChromeHearts-Site/en_US/Search-Show?cgid=SWEATPANTS",
+    SWEATPANTS_PAGE,
 ] + [f"/{slug}" for slug in CATEGORY_SLUGS]
 
 CATEGORY_PATHS = {
@@ -239,8 +239,12 @@ def normalize_url(href, current_url=None):
             query = urllib.parse.parse_qs(parsed.query)
 
             cgid = query.get("cgid", [""])[0]
+            site = query.get("site", [""])[0]
             if cgid and re.fullmatch(r"[A-Za-z0-9_-]+", cgid):
-                return BASE + path + "?cgid=" + urllib.parse.quote(cgid, safe="")
+                normalized_query = "cgid=" + urllib.parse.quote(cgid, safe="")
+                if site and re.fullmatch(r"[A-Za-z0-9_-]+", site):
+                    normalized_query += "&site=" + urllib.parse.quote(site, safe="")
+                return BASE + path + "?" + normalized_query
 
         return BASE + path
 
