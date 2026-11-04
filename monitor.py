@@ -111,7 +111,7 @@ def collect_product_metadata(html, current_url):
     """
     products = set()
     spans = re.findall(
-        r"<span\\b(?=[^>]*\\bclass=[\\\"'][^\\\"']*product-metadata[^\\\"']*[\\\"'])[^>]*>",
+        r"""<span\b(?=[^>]*\bclass=["'][^"']*product-metadata[^"']*["'])[^>]*>""",
         html,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -122,7 +122,7 @@ def collect_product_metadata(html, current_url):
         attrs = {
             key.lower(): value
             for key, value in re.findall(
-                r"data-([a-z]+)=[\\\"']([^\\\"']*)[\\\"']",
+                r"""data-([a-z]+)=["']([^"']*)["']""",
                 span,
                 flags=re.IGNORECASE,
             )
@@ -132,9 +132,9 @@ def collect_product_metadata(html, current_url):
             continue
 
         link_pattern = (
-            r"href=[\\\"']([^\\\"']*/"
+            r"""href=["']([^"']*/"""
             + re.escape(pid)
-            + r"\\.html(?:\\?[^\\\"']*)?)[\\\"']"
+            + r""".html(?:\?[^"']*)?["']"""
         )
         match = re.search(link_pattern, html, flags=re.IGNORECASE)
 
@@ -162,7 +162,7 @@ def discover_category_pages(html, current_url):
     }
 
     for href in re.findall(
-        r"href=[\\\"']([^\\\"']+)[\\\"']",
+        r"""href=["']([^"']+)["']""",
         html,
         flags=re.IGNORECASE,
     ):
