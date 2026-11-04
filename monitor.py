@@ -59,9 +59,6 @@ CATEGORY_SLUGS = [
     "hoodie", "hoodies", "sweatshirt", "sweatshirts", "sweater",
     "jacket", "denim", "pants", "shorts",
     "shoes", "boots", "slippers", "home", "gloves", "scarf", "tie",
-    # Verified apparel category from an official Chrome Hearts product URL:
-    # /sports-mesh/green-mesh/196637_196639.html
-    "sports-mesh",
 ]
 
 PAGES = [
