@@ -291,9 +291,41 @@ def get_html(url):
 
     with OPENER.open(request, timeout=30) as response:
         final_url = response.geturl()
-        html = response.read().decode(
+        status = response.getcode()
+        content_type = response.headers.get("Content-Type", "")
+        content_length = response.headers.get("Content-Length", "")
+        set_cookie_names = []
+        for cookie_header in response.headers.get_all("Set-Cookie", []) or []:
+            cookie_name = cookie_header.split("=", 1)[0].strip()
+            if cookie_name:
+                set_cookie_names.append(cookie_name)
+        raw = response.read()
+        html = raw.decode(
             "utf-8",
             errors="replace",
+        )
+
+    # Diagnostic only: expose the Search-Show response characteristics without
+    # printing cookie values or changing the existing collection behavior.
+    if "Search-Show" in url:
+        title_match = re.search(
+            r"<title[^>]*>(.*?)</title>",
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        page_title = re.sub(r"\\s+", " ", title_match.group(1)).strip() if title_match else "(no title)"
+        metadata_count = len(re.findall(
+            r"""<span\\b(?=[^>]*\\bclass=["'][^"']*product-metadata[^"']*["'])[^>]*>""",
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        ))
+        print(
+            f"  SEARCH RESPONSE: status={status}; landed={final_url}; "
+            f"type={content_type}; bytes={len(raw)}; "
+            f"content-length={content_length or 'unknown'}; "
+            f"title={page_title[:120]!r}; metadata={metadata_count}; "
+            f"set-cookie-names={','.join(set_cookie_names) or 'none'}",
+            flush=True,
         )
 
     return html, final_url
