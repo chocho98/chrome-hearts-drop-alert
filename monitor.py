@@ -224,18 +224,20 @@ def collect_from_pages(pages):
         try:
             html = get_html(url)
 
-            parser = Links(url)
-parser.feed(html)
+        parser = Links(url)
+            parser.feed(html)
 
-if "Search-Show" in url:
-    print("=== SWEATPANTS PAGE LINKS ===", flush=True)
-    for link in sorted(parser.found):
-        print(f"SEARCH LINK: {link}", flush=True)
+            if "Search-Show" in url:
+                print("=== SWEATPANTS PAGE LINKS ===", flush=True)
+                for link in sorted(parser.found):
+                    print(f"SEARCH LINK: {link}", flush=True)
 
-found = {
-    link for link in parser.found
-    if is_product_url(link)
-}
+            found = {
+                link
+                for link in parser.found
+                if is_product_url(link)
+            }
+
             products.update(found)
             successful += 1
 
