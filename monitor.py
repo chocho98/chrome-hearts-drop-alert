@@ -615,30 +615,24 @@ def collect_from_seed_products():
                 flags=re.IGNORECASE | re.DOTALL,
             )
             title = (
-                re.sub(r"\\s+", " ", title_match.group(1)).strip()
+                re.sub(r"\s+", " ", title_match.group(1)).strip()
                 if title_match else "(no title)"
             )
 
             metadata_count = len(re.findall(
-                r"""<span\\b(?=[^>]*\\bclass=["'][^"']*product-metadata[^"']*["'])[^>]*>""",
+                r"""<span\b(?=[^>]*\bclass=["'][^"']*product-metadata[^"']*["'])[^>]*>""",
                 html,
                 flags=re.IGNORECASE | re.DOTALL,
             ))
 
             product_schema_count = len(re.findall(
-                r"""["']@type["']\\s*:\\s*["']Product["']""",
+                r"""["']@type["']\s*:\s*["']Product["']""",
                 html,
                 flags=re.IGNORECASE,
             ))
 
             pid_hints = sorted(set(re.findall(
-                r"""(?:productID|productId|product-id|data-pid)["'\\s:=]+([A-Za-z0-9_-]{5,})""",
-                html,
-                flags=re.IGNORECASE,
-            )))[:10]
-
-            endpoint_hints = sorted(set(re.findall(
-                r"""(?:https?:)?//[^"'\\s<>]+|["']([^"'<>]{0,180}(?:Product-Show|Product-Variation|Product-Detail|Search-Show)[^"'<>]{0,180})["']""",
+                r"""(?:productID|productId|product-id|data-pid)["'\s:=]+([A-Za-z0-9_-]{5,})""",
                 html,
                 flags=re.IGNORECASE,
             )))[:10]
