@@ -430,10 +430,12 @@ def collect_from_pages(pages):
             found.update(metadata_products)
             products.update(found)
 
-            new_categories = discover_category_pages(html, final_url)
-            for category_url in sorted(new_categories):
+            category_candidates = discover_category_pages(html, final_url)
+            newly_queued = []
+            for category_url in sorted(category_candidates):
                 if category_url not in visited and category_url not in pending:
                     pending.append(category_url)
+                    newly_queued.append(category_url)
                     discovered_total += 1
 
             successful += 1
@@ -441,9 +443,12 @@ def collect_from_pages(pages):
             print(
                 f"  Landed: {final_url}; links: {len(parser.found)}; "
                 f"metadata: {len(metadata_products)}; products: {len(found)}; "
-                f"new categories: {len(new_categories)}",
+                f"category candidates: {len(category_candidates)}; "
+                f"newly queued: {len(newly_queued)}",
                 flush=True,
             )
+            for category_url in newly_queued:
+                print(f"    DISCOVERED CATEGORY: {category_url}", flush=True)
 
         except Exception as exc:
             print(
