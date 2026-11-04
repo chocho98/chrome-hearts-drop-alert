@@ -47,7 +47,7 @@ SITEMAPS = [
 SWEATPANTS_PAGE = (
     BASE
     + "/on/demandware.store/Sites-ChromeHearts-Site/"
-    + "en_US/Search-Show?cgid=SWEATPANTS"
+    + "en_US/Search-Show?cgid=SWEATPANTS&site=502"
 )
 
 # Search-Show is the native storefront search route. Probe apparel terms
