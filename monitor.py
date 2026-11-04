@@ -39,6 +39,17 @@ SWEATPANTS_PAGE = (
     + "en_US/Search-Show?cgid=SWEATPANTS"
 )
 
+# Official category slug candidates. Empty categories may redirect home.
+CATEGORY_SLUGS = [
+    "socks", "scents", "baccarat", "intimates", "boxers-leggings",
+    "hat", "eyewear", "sunglasses", "eyewear-accessories",
+    "bag", "bags", "belt", "earring",
+    "t-shirt", "t-shirts", "shirt", "shirts",
+    "hoodie", "hoodies", "sweatshirt", "sweatshirts", "sweater",
+    "jacket", "denim", "pants", "shorts",
+    "shoes", "boots", "slippers", "home", "gloves", "scarf", "tie",
+]
+
 PAGES = [
     "/",
     "/eyewear.html",
@@ -53,7 +64,7 @@ PAGES = [
     "/shop",
     "/on/demandware.store/Sites-ChromeHearts-Site/en_US/Default-Start",
     "/on/demandware.store/Sites-ChromeHearts-Site/en_US/Search-Show?cgid=SWEATPANTS",
-]
+] + [f"/{slug}" for slug in CATEGORY_SLUGS]
 
 CATEGORY_PATHS = {
     urllib.parse.urlsplit(BASE + page).path.rstrip("/") or "/"
@@ -88,6 +99,45 @@ class Links(HTMLParser):
 
                 if normalized:
                     self.found.add(normalized)
+
+
+def collect_product_metadata(html, current_url):
+    """
+    Read Chrome Hearts product-card metadata and match each product ID
+    to its canonical product-detail link.
+    """
+    products = set()
+    spans = re.findall(
+        r"<span\b(?=[^>]*\bclass=[\"'][^\"']*product-metadata[^\"']*[\"'])[^>]*>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    for span in spans:
+        attrs = {
+            key.lower(): value
+            for key, value in re.findall(
+                r"data-([a-z]+)=[\"']([^\"']*)[\"']",
+                span,
+                flags=re.IGNORECASE,
+            )
+        }
+        pid = attrs.get("pid", "").strip()
+        if not pid:
+            continue
+
+        link_pattern = (
+            r"href=[\"']([^\"']*/"
+            + re.escape(pid)
+            + r"\.html(?:\?[^\"']*)?)[\"']"
+        )
+        match = re.search(link_pattern, html, flags=re.IGNORECASE)
+        if match:
+            url = normalize_url(match.group(1), current_url)
+            if url and is_product_url(url):
+                products.add(url)
+
+    return products
 
 
 # ==========================================
@@ -289,17 +339,21 @@ def collect_from_pages(pages):
                         flush=True,
                     )
 
+            # Read both ordinary product links and product-card metadata.
             found = {
                 link
                 for link in parser.found
                 if is_product_url(link)
             }
+            metadata_products = collect_product_metadata(html, url)
+            found.update(metadata_products)
 
             products.update(found)
             successful += 1
 
             print(
                 f"  Links: {len(parser.found)}; "
+                f"metadata: {len(metadata_products)}; "
                 f"products: {len(found)}",
                 flush=True,
             )
