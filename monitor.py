@@ -19,7 +19,8 @@ from pathlib import Path
 BASE = "https://www.chromehearts.com"
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 STATE = Path("seen_products.json")
-VERSION = 8
+AVAILABILITY_STATE = Path("availability_state.json")
+VERSION = 9
 
 HEADERS = {
     "User-Agent": (
@@ -796,6 +797,116 @@ def collect_products():
 
 
 # ==========================================
+
+# ==========================================
+# 8A. 사이즈 무관 재고 상태 확인
+# ==========================================
+
+def load_availability():
+    if not AVAILABILITY_STATE.exists():
+        return {}
+    try:
+        with AVAILABILITY_STATE.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        print(f"WARNING: Could not read availability state: {exc}", flush=True)
+        raise RuntimeError(
+            "Availability state could not be read. Stopping to protect existing data."
+        )
+
+
+def save_availability(data):
+    temp_file = AVAILABILITY_STATE.with_suffix(".tmp")
+    with temp_file.open("w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2, sort_keys=True)
+    temp_file.replace(AVAILABILITY_STATE)
+
+
+def check_availability(products):
+    """
+    Check product detail pages without preferring any particular size.
+    A product is considered available only when its live detail page has an
+    Add to Bag control and no explicit sold-out/out-of-stock wording.
+    Ambiguous pages remain unknown and never trigger a restock alert.
+    """
+    previous = load_availability()
+    current = dict(previous)
+    restocked = set()
+    checked = 0
+    available_count = 0
+    out_count = 0
+
+    for url in sorted(products):
+        print(f"Checking product availability: {url}", flush=True)
+        try:
+            html, final_url = get_html(url)
+            requested = urllib.parse.urlsplit(url)
+            landed = urllib.parse.urlsplit(final_url)
+
+            if (
+                landed.netloc.lower() not in ("www.chromehearts.com", "chromehearts.com")
+                or landed.path.rstrip("/") != requested.path.rstrip("/")
+            ):
+                print(f"  AVAILABILITY UNKNOWN: redirected to {final_url}", flush=True)
+                continue
+
+            visible_text = re.sub(
+                r"<(script|style)\b[^>]*>.*?</\1>",
+                " ",
+                html,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            visible_text = re.sub(r"<[^>]+>", " ", visible_text)
+            visible_text = urllib.parse.unquote(visible_text)
+            visible_text = re.sub(r"\s+", " ", visible_text).lower()
+
+            sold_out = bool(re.search(
+                r"\b(out of stock|sold out|currently unavailable|not available)\b",
+                visible_text,
+                flags=re.IGNORECASE,
+            ))
+            add_to_bag = bool(re.search(
+                r"\badd\s+to\s+bag\b",
+                visible_text,
+                flags=re.IGNORECASE,
+            ))
+
+            if sold_out:
+                status = "out_of_stock"
+                out_count += 1
+            elif add_to_bag:
+                status = "available"
+                available_count += 1
+            else:
+                status = "unknown"
+
+            old_status = previous.get(url)
+            if old_status == "out_of_stock" and status == "available":
+                restocked.add(url)
+                print(f"  RESTOCK DETECTED: {url}", flush=True)
+
+            if status != "unknown":
+                current[url] = status
+                checked += 1
+                print(f"  AVAILABILITY: {status}", flush=True)
+            else:
+                print("  AVAILABILITY UNKNOWN: no reliable stock signal", flush=True)
+
+        except Exception as exc:
+            print(f"  AVAILABILITY CHECK SKIPPED: {exc}", flush=True)
+
+        time.sleep(0.25)
+
+    save_availability(current)
+    print(
+        f"Availability checked: {checked}; available: {available_count}; "
+        f"out of stock: {out_count}; restocked: {len(restocked)}",
+        flush=True,
+    )
+    return restocked
+
+
 # 8. 기존 상품 기록 불러오기
 # ==========================================
 
@@ -865,7 +976,9 @@ def save_seen(products):
 # 10. ntfy 알림 전송
 # ==========================================
 
-def notify(new_products):
+def notify(new_products, restocked_products=None):
+
+    restocked_products = restocked_products or set()
 
     if not NTFY_TOPIC:
         raise RuntimeError(
@@ -879,10 +992,15 @@ def notify(new_products):
 
     url = f"https://ntfy.sh/{topic}"
 
-    message = (
-        "Chrome Hearts 신규 상품 발견!\n\n"
-        + "\n".join(sorted(new_products))
-    )
+    sections = []
+    if new_products:
+        sections.append("신규 상품\n" + "\n".join(sorted(new_products)))
+    if restocked_products:
+        sections.append(
+            "재입고 / 구매 가능 상태 감지 (사이즈 무관)\n"
+            + "\n".join(sorted(restocked_products))
+        )
+    message = "\n\n".join(sections)
 
     request = urllib.request.Request(
         url,
@@ -924,6 +1042,8 @@ def main():
         flush=True,
     )
 
+    restocked_products = check_availability(current)
+
     # 처음 실행하는 경우 기준 데이터만 저장
     if not previous:
 
@@ -943,7 +1063,7 @@ def main():
         flush=True,
     )
 
-    if new_products:
+    if new_products or restocked_products:
 
         for product in sorted(new_products):
             print(
@@ -951,7 +1071,7 @@ def main():
                 flush=True,
             )
 
-        notify(new_products)
+        notify(new_products, restocked_products)
 
     else:
 
